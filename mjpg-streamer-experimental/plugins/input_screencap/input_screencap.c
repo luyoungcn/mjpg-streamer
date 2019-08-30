@@ -34,13 +34,16 @@
 
 #include "../../mjpg_streamer.h"
 #include "../../utils.h"
+#include "screencap.h"
 
-#define INPUT_PLUGIN_NAME "FILE input plugin"
+#define INPUT_PLUGIN_NAME "SCREENCAP input plugin"
 
+#if 0
 typedef enum _read_mode {
     NewFilesOnly,
     ExistingFiles
 } read_mode;
+#endif
 
 /* private functions and variables to this plugin */
 static pthread_t   worker;
@@ -50,16 +53,16 @@ void *worker_thread(void *);
 void worker_cleanup(void *);
 void help(void);
 
-static int delay = 1;
-static char *folder = NULL;
-static char *filename = NULL;
-static int rm = 0;
+static int delay = 20;
+//static char *folder = NULL;
+//static char *filename = NULL;
+//static int rm = 0;
 static int plugin_number;
-static read_mode mode = NewFilesOnly;
+//static read_mode mode = NewFilesOnly;
 
 /* global variables for this plugin */
-static int fd, rc, wd, size;
-static struct inotify_event *ev;
+// static int fd, rc, wd, size;
+// static struct inotify_event *ev;
 
 /*** plugin interface functions ***/
 int input_init(input_parameter *param, int id)
@@ -78,19 +81,10 @@ int input_init(input_parameter *param, int id)
     while(1) {
         int option_index = 0, c = 0;
         static struct option long_options[] = {
-            {"h", no_argument, 0, 0
-            },
+            {"h", no_argument, 0, 0},
             {"help", no_argument, 0, 0},
             {"d", required_argument, 0, 0},
             {"delay", required_argument, 0, 0},
-            {"f", required_argument, 0, 0},
-            {"folder", required_argument, 0, 0},
-            {"r", no_argument, 0, 0},
-            {"remove", no_argument, 0, 0},
-            {"n", required_argument, 0, 0},
-            {"name", required_argument, 0, 0},
-            {"e", no_argument, 0, 0},
-            {"existing", no_argument, 0, 0},
             {0, 0, 0, 0}
         };
 
@@ -120,37 +114,6 @@ int input_init(input_parameter *param, int id)
             DBG("case 2,3\n");
             delay = atoi(optarg);
             break;
-
-            /* f, folder */
-        case 4:
-        case 5:
-            DBG("case 4,5\n");
-            folder = malloc(strlen(optarg) + 2);
-            strcpy(folder, optarg);
-            if(optarg[strlen(optarg)-1] != '/')
-                strcat(folder, "/");
-            break;
-
-            /* r, remove */
-        case 6:
-        case 7:
-            DBG("case 6,7\n");
-            rm = 1;
-            break;
-
-            /* n, name */
-        case 8:
-        case 9:
-            DBG("case 8,9\n");
-            filename = malloc(strlen(optarg) + 1);
-            strcpy(filename, optarg);
-            break;
-            /* e, existing */
-        case 10:
-        case 11:
-            DBG("case 10,11\n");
-            mode = ExistingFiles;
-            break;
         default:
             DBG("default case\n");
             help();
@@ -161,15 +124,15 @@ int input_init(input_parameter *param, int id)
     pglobal = param->global;
 
     /* check for required parameters */
-    if(folder == NULL) {
-        IPRINT("ERROR: no folder specified\n");
-        return 1;
-    }
+//    if(folder == NULL) {
+//        IPRINT("ERROR: no folder specified\n");
+//        return 1;
+//    }
 
-    IPRINT("folder to watch...: %s\n", folder);
-    IPRINT("forced delay......: %i\n", delay);
-    IPRINT("delete file.......: %s\n", (rm) ? "yes, delete" : "no, do not delete");
-    IPRINT("filename must be..: %s\n", (filename == NULL) ? "-no filter for certain filename set-" : filename);
+//    IPRINT("folder to watch...: %s\n", folder);
+      IPRINT("forced delay......: %i\n", delay);
+//    IPRINT("delete file.......: %s\n", (rm) ? "yes, delete" : "no, do not delete");
+//    IPRINT("filename must be..: %s\n", (filename == NULL) ? "-no filter for certain filename set-" : filename);
 
     param->global->in[id].name = malloc((strlen(INPUT_PLUGIN_NAME) + 1) * sizeof(char));
     sprintf(param->global->in[id].name, INPUT_PLUGIN_NAME);
@@ -180,6 +143,7 @@ int input_init(input_parameter *param, int id)
 int input_stop(int id)
 {
     DBG("will cancel input thread\n");
+    // TODO
     // pthread_cancel(worker);
     return 0;
 }
@@ -188,6 +152,7 @@ int input_run(int id)
 {
     pglobal->in[id].buf = NULL;
 
+#if 0
     if (mode == NewFilesOnly) {
         rc = fd = inotify_init();
         if(rc == -1) {
@@ -208,6 +173,7 @@ int input_run(int id)
             return 1;
         }
     }
+#endif
 
     if(pthread_create(&worker, 0, worker_thread, NULL) != 0) {
         free(pglobal->in[id].buf);
@@ -223,6 +189,8 @@ int input_run(int id)
 /*** private functions for this plugin below ***/
 void help(void)
 {
+    fprintf(stderr, "TODO\n");
+#if 0
     fprintf(stderr, " ---------------------------------------------------------------\n" \
     " Help for input plugin..: "INPUT_PLUGIN_NAME"\n" \
     " ---------------------------------------------------------------\n" \
@@ -233,11 +201,13 @@ void help(void)
     " [-n | --name ].........: ignore changes unless filename matches\n" \
     " [-e | --existing ].....: serve the existing *.jpg files from the specified directory\n" \
     " ---------------------------------------------------------------\n");
+#endif
 }
 
 /* the single writer thread */
 void *worker_thread(void *arg)
 {
+#if 0
     char buffer[1<<16];
     int file;
     size_t filesize = 0;
@@ -255,11 +225,14 @@ void *worker_thread(void *arg)
            return NULL;
         }
     }
+#endif
+    struct timeval timestamp;
 
     /* set cleanup handler to cleanup allocated resources */
     pthread_cleanup_push(worker_cleanup, NULL);
 
     while(!pglobal->stop) {
+#if 0
         if (mode == NewFilesOnly) {
             /* wait for new frame, read will block until something happens */
             rc = read(fd, ev, size);
@@ -307,6 +280,8 @@ void *worker_thread(void *arg)
             }
         }
 
+#endif
+#if 0
         /* open file for reading */
         rc = file = open(buffer, O_RDONLY);
         if(rc == -1) {
@@ -324,13 +299,14 @@ void *worker_thread(void *arg)
 
         filesize = stats.st_size;
 
+#endif
         /* copy frame from file to global buffer */
         pthread_mutex_lock(&pglobal->in[plugin_number].db);
 
         /* allocate memory for frame */
         if(pglobal->in[plugin_number].buf != NULL)
             free(pglobal->in[plugin_number].buf);
-
+#if 0
         pglobal->in[plugin_number].buf = malloc(filesize + (1 << 16));
 
         if(pglobal->in[plugin_number].buf == NULL) {
@@ -345,6 +321,13 @@ void *worker_thread(void *arg)
             close(file);
             break;
         }
+#endif
+        captureScreen(&pglobal->in[plugin_number].buf, &pglobal->in[plugin_number].size);
+
+        if(pglobal->in[plugin_number].buf == NULL) {
+            fprintf(stderr, "captureScreen buff NULL\n");
+            break;
+        }
 
         gettimeofday(&timestamp, NULL);
         pglobal->in[plugin_number].timestamp = timestamp;
@@ -353,25 +336,26 @@ void *worker_thread(void *arg)
         pthread_cond_broadcast(&pglobal->in[plugin_number].db_update);
         pthread_mutex_unlock(&pglobal->in[plugin_number].db);
 
-        close(file);
+//        close(file);
 
         /* delete file if necessary */
-        if(rm) {
-            rc = unlink(buffer);
-            if(rc == -1) {
-                perror("could not remove/delete file");
-            }
-        }
+//        if(rm) {
+//            rc = unlink(buffer);
+//            if(rc == -1) {
+//                perror("could not remove/delete file");
+//            }
+//        }
 
         if(delay != 0)
-            usleep(1000 * 1000 * delay);
+            // usleep(1000 * 1000 * delay);
+            usleep(1000 * delay);
     }
 
-thread_quit:
-    while (fileCount--) {
-       free(fileList[fileCount]);
-    }
-    free(fileList);
+// thread_quit:
+//    while (fileCount--) {
+//       free(fileList[fileCount]);
+//    }
+//    free(fileList);
 
     DBG("leaving input thread, calling cleanup function now\n");
     /* call cleanup handler, signal with the parameter */
@@ -394,6 +378,7 @@ void worker_cleanup(void *arg)
 
     if(pglobal->in[plugin_number].buf != NULL) free(pglobal->in[plugin_number].buf);
 
+#if 0
     free(ev);
 
     if (mode == NewFilesOnly) {
@@ -407,9 +392,5 @@ void worker_cleanup(void *arg)
             perror("could not close filedescriptor");
         }
     }
+#endif
 }
-
-
-
-
-

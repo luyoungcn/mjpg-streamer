@@ -1,0 +1,56 @@
+// For the host only
+// =====================================================
+cc_library {
+    name: "output_http",
+//    vendor_available: true,
+//    vndk: {
+//        enabled: true,
+//    },
+//    host_supported: true,
+
+    srcs: [
+        "httpd.c",
+        "output_http.c",
+    ],
+
+    export_include_dirs: ["."],
+
+    cflags: [
+        "-Dinput_file_EXPORTS=1",
+        "-DDEBUG=1",
+        "-fPIC",
+        "-O3",
+        "-std=c++11",
+        "-lpthread",
+        "-Wall",
+        "-Werror",
+        "-Wno-pointer-arith",
+        "-Wno-error=ignored-attributes",
+        "-Wno-missing-field-initializers",
+        "-Wno-self-assign",
+        "-Wno-sign-compare",
+        "-Wno-tautological-pointer-compare",
+        "-Wno-unused-function",
+        "-Wno-unused-parameter",
+        "-Wno-error=implicit-function-declaration",
+    ],
+
+    shared_libs: [
+        "libcutils",
+        "libutils",
+        "libdl",
+        "libbinder",
+        "liblog",
+    ],
+
+
+    export_shared_lib_headers: [
+        "libcutils",
+        "libutils",
+        "libbinder",
+    ],
+
+//    static: {
+//        cflags: ["-fvisibility=hidden"],
+//    },
+}
