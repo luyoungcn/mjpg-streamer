@@ -32,6 +32,7 @@
 
 #include <ui/DisplayInfo.h>
 #include <ui/PixelFormat.h>
+#include <utils/Mutex.h>
 
 #include <system/graphics.h>
 
@@ -47,12 +48,30 @@
 #pragma GCC diagnostic pop
 
 using namespace android;
+using std::queue;
+
+struct encode_buf_info {
+    unsigned char* pbuf;
+    int size;
+};
+
+android::Mutex mLock;
+queue<sp<GraphicBuffer>> GBufferQueue;
+queue<struct encode_buf_info> EncodedBufferQueue;
 
 static uint32_t DEFAULT_DISPLAY_ID = ISurfaceComposer::eDisplayIdMain;
 
 #define COLORSPACE_UNKNOWN    0
 #define COLORSPACE_SRGB       1
 #define COLORSPACE_DISPLAY_P3 2
+
+// Maps orientations from DisplayInfo to ISurfaceComposer
+static const uint32_t ORIENTATION_MAP[] = {
+    ISurfaceComposer::eRotateNone, // 0 == DISPLAY_ORIENTATION_0
+    ISurfaceComposer::eRotate270, // 1 == DISPLAY_ORIENTATION_90
+    ISurfaceComposer::eRotate180, // 2 == DISPLAY_ORIENTATION_180
+    ISurfaceComposer::eRotate90, // 3 == DISPLAY_ORIENTATION_270
+};
 
 /*
 static void usage(const char* pname)
@@ -93,173 +112,164 @@ static sk_sp<SkColorSpace> dataSpaceToColorSpace(android_dataspace d)
     }
 }
 
-/*
-static uint32_t dataSpaceToInt(android_dataspace d)
-{
-    switch (d) {
-        case HAL_DATASPACE_V0_SRGB:
-            return COLORSPACE_SRGB;
-        case HAL_DATASPACE_DISPLAY_P3:
-            return COLORSPACE_DISPLAY_P3;
-        default:
-            return COLORSPACE_UNKNOWN;
-    }
-}
-*/
+// int main(int argc, char** argv)
+// buf --- alloc in this function, user must free it after used
+// size: output param
+// type: input param
+// TODO
+void* captureScreen_thread(void* args) {
+        // setThreadPoolMaxThreadCount(0) actually tells the kernel it's
+        // not allowed to spawn any additional threads, but we still spawn
+        // a binder thread from userspace when we call startThreadPool().
+        // See b/36066697 for rationale
+        ProcessState::self()->setThreadPoolMaxThreadCount(0);
+        ProcessState::self()->startThreadPool();
+    while (1) {
+        int32_t displayId = DEFAULT_DISPLAY_ID;
 
-/*
-static status_t notifyMediaScanner(const char* fileName) {
-    String8 cmd("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://");
-    cmd.append(fileName);
-    cmd.append(" > /dev/null");
-    int result = system(cmd.string());
-    if (result < 0) {
-        fprintf(stderr, "Unable to broadcast intent for media scanner.\n");
-        return UNKNOWN_ERROR;
+        DBG("captureScreen_thread Enter GBufferQueue size: %zd\n", GBufferQueue.size());
+
+        sp<IBinder> display = SurfaceComposerClient::getBuiltInDisplay(displayId);
+        if (display == NULL) {
+            fprintf(stderr, "Unable to get handle for display %d\n", displayId);
+            // b/36066697: Avoid running static destructors.
+            _exit(1);
+        }
+
+        Vector<DisplayInfo> configs;
+        SurfaceComposerClient::getDisplayConfigs(display, &configs);
+        int activeConfig = SurfaceComposerClient::getActiveConfig(display);
+        if (static_cast<size_t>(activeConfig) >= configs.size()) {
+            fprintf(stderr, "Active config %d not inside configs (size %zu)\n",
+                    activeConfig, configs.size());
+            // b/36066697: Avoid running static destructors.
+            _exit(1);
+        }
+        uint8_t displayOrientation = configs[activeConfig].orientation;
+        uint32_t captureOrientation = ORIENTATION_MAP[displayOrientation];
+
+        while (GBufferQueue.size() > 3) {
+            DBG("############### too many GBuffer ready, wait consumer\n");
+            usleep(1000*50);
+        }
+
+        sp<GraphicBuffer> outBuffer;
+        status_t result = ScreenshotClient::capture(display, Rect(), 0 /* reqWidth */,
+                0 /* reqHeight */, INT32_MIN, INT32_MAX, /* all layers */ false, captureOrientation,
+                &outBuffer);
+        if (result != NO_ERROR) {
+            // close(fd);
+            _exit(1);
+        }
+
+        {
+            android::Mutex::Autolock _l(mLock);
+            GBufferQueue.push(outBuffer);
+        }
     }
-    return NO_ERROR;
+    return NULL;
 }
-*/
+
+void* encode_thread(void* args) {
+    while (1) {
+        void* base = NULL;
+        uint32_t w, s, h, f;
+        android_dataspace d;
+        size_t size = 0;
+        sp<GraphicBuffer> outBuffer;
+        struct encode_buf_info encode_buf;
+
+        DBG("encode_thread Enter GBufferQueue size: %zd, EncodedBufferQueue size: %zd\n", GBufferQueue.size(), EncodedBufferQueue.size());
+
+        while (GBufferQueue.size() < 1 || EncodedBufferQueue.size() > 6) {
+            DBG("######### waiting for capture or client\n");
+            usleep(1000*10);
+        }
+
+        {
+            android::Mutex::Autolock _l(mLock);
+            outBuffer = GBufferQueue.front();
+        }
+
+        status_t result = outBuffer->lock(GraphicBuffer::USAGE_SW_READ_OFTEN, &base);
+
+        if (result != NO_ERROR) {
+            _exit(1);
+        }
+
+        if (base == NULL) {
+            _exit(1);
+        }
+
+        w = outBuffer->getWidth();
+        h = outBuffer->getHeight();
+        s = outBuffer->getStride();
+        f = outBuffer->getPixelFormat();
+        d = HAL_DATASPACE_UNKNOWN;
+        size = s * h * bytesPerPixel(f);
+
+        encode_buf.pbuf = (unsigned char*)malloc(16*1024*1024);
+
+        if(encode_buf.pbuf == NULL) {
+            fprintf(stderr, "could not allocate memory\n");
+            _exit(1);
+        }
+
+        const SkImageInfo info =
+            SkImageInfo::Make(w, h, flinger2skia(f), kPremul_SkAlphaType, dataSpaceToColorSpace(d));
+        SkPixmap pixmap(info, base, s * bytesPerPixel(f));
+        struct FDWStream final : public SkWStream {
+            size_t fBytesWritten = 0;
+            // int fFd;
+            unsigned char* mBuf;
+            FDWStream(unsigned char* buf) : mBuf(buf) {}
+            size_t bytesWritten() const override { return fBytesWritten; }
+            bool write(const void * buffer, size_t size) override {
+            fBytesWritten += size;
+            memcpy(mBuf, buffer, size);
+            mBuf+=size;
+            return true;
+            }
+        } fdStream(encode_buf.pbuf);
+
+        (void)SkEncodeImage(&fdStream, pixmap, SkEncodedImageFormat::kJPEG, 100);
+
+        encode_buf.size = fdStream.bytesWritten();
+
+        {
+            android::Mutex::Autolock _l(mLock);
+            EncodedBufferQueue.push(encode_buf);
+            GBufferQueue.pop();
+        }
+    }
+
+
+    return 0;
+}
 
 // int main(int argc, char** argv)
 // buf --- alloc in this function, user must free it after used
 // size: output param
 // type: input param
 // TODO
-int captureScreen(unsigned char** in_buf, int* out_size/*format_t type*/) {
-    // TODO
-    bool encode = true;
-    bool jpeg = true;
-    bool png = false;
-    int32_t displayId = DEFAULT_DISPLAY_ID;
+int getEncodedBuf(unsigned char** in_buf, int* out_size/*format_t type*/) {
+    DBG("getEncodedBuf Enter, EncodedBufferQueue size: %zd\n", EncodedBufferQueue.size());
 
-    // void const* mapbase = MAP_FAILED;
-    // ssize_t mapsize = -1;
-
-    void* base = NULL;
-    uint32_t w, s, h, f;
-    android_dataspace d;
-    size_t size = 0;
-
-    // Maps orientations from DisplayInfo to ISurfaceComposer
-    static const uint32_t ORIENTATION_MAP[] = {
-        ISurfaceComposer::eRotateNone, // 0 == DISPLAY_ORIENTATION_0
-        ISurfaceComposer::eRotate270, // 1 == DISPLAY_ORIENTATION_90
-        ISurfaceComposer::eRotate180, // 2 == DISPLAY_ORIENTATION_180
-        ISurfaceComposer::eRotate90, // 3 == DISPLAY_ORIENTATION_270
-    };
-
-    // setThreadPoolMaxThreadCount(0) actually tells the kernel it's
-    // not allowed to spawn any additional threads, but we still spawn
-    // a binder thread from userspace when we call startThreadPool().
-    // See b/36066697 for rationale
-    ProcessState::self()->setThreadPoolMaxThreadCount(0);
-    ProcessState::self()->startThreadPool();
-
-    sp<IBinder> display = SurfaceComposerClient::getBuiltInDisplay(displayId);
-    if (display == NULL) {
-        fprintf(stderr, "Unable to get handle for display %d\n", displayId);
-        // b/36066697: Avoid running static destructors.
-        _exit(1);
+    while (EncodedBufferQueue.size() < 1) {
+        DBG("###############        waiting for encoded buffer\n");
+        usleep(1000*50);
     }
 
-    Vector<DisplayInfo> configs;
-    SurfaceComposerClient::getDisplayConfigs(display, &configs);
-    int activeConfig = SurfaceComposerClient::getActiveConfig(display);
-    if (static_cast<size_t>(activeConfig) >= configs.size()) {
-        fprintf(stderr, "Active config %d not inside configs (size %zu)\n",
-                activeConfig, configs.size());
-        // b/36066697: Avoid running static destructors.
-        _exit(1);
-    }
-    uint8_t displayOrientation = configs[activeConfig].orientation;
-    uint32_t captureOrientation = ORIENTATION_MAP[displayOrientation];
+    struct encode_buf_info info;
 
-    sp<GraphicBuffer> outBuffer;
-    status_t result = ScreenshotClient::capture(display, Rect(), 0 /* reqWidth */,
-            0 /* reqHeight */, INT32_MIN, INT32_MAX, /* all layers */ false, captureOrientation,
-            &outBuffer);
-    if (result != NO_ERROR) {
-        // close(fd);
-        _exit(1);
-    }
+    android::Mutex::Autolock _l(mLock);
 
-    result = outBuffer->lock(GraphicBuffer::USAGE_SW_READ_OFTEN, &base);
+    info = EncodedBufferQueue.front();
 
-    if (base == NULL) {
-        // close(fd);
-        _exit(1);
-    }
+    *in_buf = info.pbuf;
+    *out_size = info.size;
 
-    w = outBuffer->getWidth();
-    h = outBuffer->getHeight();
-    s = outBuffer->getStride();
-    f = outBuffer->getPixelFormat();
-    d = HAL_DATASPACE_UNKNOWN;
-    size = s * h * bytesPerPixel(f);
+    EncodedBufferQueue.pop();
 
-    // from input_file.c
-    // in_buf = malloc(size + (1 << 16));
-    *in_buf = (unsigned char*)malloc(16*1024*1024);
-
-    if(*in_buf == NULL) {
-        fprintf(stderr, "could not allocate memory\n");
-        _exit(1);
-    }
-    // end from input_file.c
-
-    // if (png) {
-    if (encode) {
-        const SkImageInfo info =
-            SkImageInfo::Make(w, h, flinger2skia(f), kPremul_SkAlphaType, dataSpaceToColorSpace(d));
-        SkPixmap pixmap(info, base, s * bytesPerPixel(f));
-        struct FDWStream final : public SkWStream {
-          size_t fBytesWritten = 0;
-          // int fFd;
-          unsigned char* mBuf;
-          FDWStream(unsigned char* buf) : mBuf(buf) {}
-          size_t bytesWritten() const override { return fBytesWritten; }
-          bool write(const void * buffer, size_t size) override {
-            fBytesWritten += size;
-            // return size == 0 || ::write(fFd, buffer, size) > 0;
-            // TODO ret
-            memcpy(mBuf, buffer, size);
-            mBuf+=size;
-            return true;
-          }
-        } fdStream(*in_buf);
-        if (jpeg) {
-            (void)SkEncodeImage(&fdStream, pixmap, SkEncodedImageFormat::kJPEG, 100);
-        } else if (png) {
-            (void)SkEncodeImage(&fdStream, pixmap, SkEncodedImageFormat::kPNG, 100);
-        }
-
-        if (out_size != NULL) {
-            *out_size = fdStream.bytesWritten();
-        }
-//        if (fn != NULL) {
-//            notifyMediaScanner(fn);
-//        }
-//    } else {
-        /*
-        uint32_t c = dataSpaceToInt(d);
-        write(fd, &w, 4);
-        write(fd, &h, 4);
-        write(fd, &f, 4);
-        write(fd, &c, 4);
-        size_t Bpp = bytesPerPixel(f);
-        for (size_t y=0 ; y<h ; y++) {
-            write(fd, base, w*Bpp);
-            base = (void *)((char *)base + s*Bpp);
-        }
-        */
-    }
-    // close(fd);
-    // if (mapbase != MAP_FAILED) {
-    //     munmap((void *)mapbase, mapsize);
-    // }
-
-    // b/36066697: Avoid running static destructors.
-    // _exit(0);
     return 0;
 }

@@ -38,14 +38,9 @@
 
 #define INPUT_PLUGIN_NAME "SCREENCAP input plugin"
 
-#if 0
-typedef enum _read_mode {
-    NewFilesOnly,
-    ExistingFiles
-} read_mode;
-#endif
-
 /* private functions and variables to this plugin */
+static pthread_t   capscreen;
+static pthread_t   encode;
 static pthread_t   worker;
 static globals     *pglobal;
 
@@ -54,16 +49,7 @@ void worker_cleanup(void *);
 void help(void);
 
 static int delay = 20;
-//static char *folder = NULL;
-//static char *filename = NULL;
-//static int rm = 0;
 static int plugin_number;
-//static read_mode mode = NewFilesOnly;
-
-/* global variables for this plugin */
-// static int fd, rc, wd, size;
-// static struct inotify_event *ev;
-
 /*** plugin interface functions ***/
 int input_init(input_parameter *param, int id)
 {
@@ -123,16 +109,7 @@ int input_init(input_parameter *param, int id)
 
     pglobal = param->global;
 
-    /* check for required parameters */
-//    if(folder == NULL) {
-//        IPRINT("ERROR: no folder specified\n");
-//        return 1;
-//    }
-
-//    IPRINT("folder to watch...: %s\n", folder);
-      IPRINT("forced delay......: %i\n", delay);
-//    IPRINT("delete file.......: %s\n", (rm) ? "yes, delete" : "no, do not delete");
-//    IPRINT("filename must be..: %s\n", (filename == NULL) ? "-no filter for certain filename set-" : filename);
+    IPRINT("forced delay......: %i\n", delay);
 
     param->global->in[id].name = malloc((strlen(INPUT_PLUGIN_NAME) + 1) * sizeof(char));
     sprintf(param->global->in[id].name, INPUT_PLUGIN_NAME);
@@ -144,6 +121,8 @@ int input_stop(int id)
 {
     DBG("will cancel input thread\n");
     // TODO
+    // pthread_cancel(capscreen);
+    // pthread_cancel(encode);
     // pthread_cancel(worker);
     return 0;
 }
@@ -152,28 +131,21 @@ int input_run(int id)
 {
     pglobal->in[id].buf = NULL;
 
-#if 0
-    if (mode == NewFilesOnly) {
-        rc = fd = inotify_init();
-        if(rc == -1) {
-            perror("could not initilialize inotify");
-            return 1;
-        }
-
-        rc = wd = inotify_add_watch(fd, folder, IN_CLOSE_WRITE | IN_MOVED_TO | IN_ONLYDIR);
-        if(rc == -1) {
-            perror("could not add watch");
-            return 1;
-        }
-
-        size = sizeof(struct inotify_event) + (1 << 16);
-        ev = malloc(size);
-        if(ev == NULL) {
-            perror("not enough memory");
-            return 1;
-        }
+    if(pthread_create(&capscreen, 0, captureScreen_thread, NULL) != 0) {
+        free(pglobal->in[id].buf);
+        fprintf(stderr, "could not start capture screen thread\n");
+        exit(EXIT_FAILURE);
     }
-#endif
+
+    pthread_detach(capscreen);
+
+    if(pthread_create(&encode, 0, encode_thread, NULL) != 0) {
+        free(pglobal->in[id].buf);
+        fprintf(stderr, "could not start encode thread\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_detach(encode);
 
     if(pthread_create(&worker, 0, worker_thread, NULL) != 0) {
         free(pglobal->in[id].buf);
@@ -207,122 +179,24 @@ void help(void)
 /* the single writer thread */
 void *worker_thread(void *arg)
 {
-#if 0
-    char buffer[1<<16];
-    int file;
-    size_t filesize = 0;
-    struct stat stats;
-    struct dirent **fileList;
-    int fileCount = 0;
-    int currentFileNumber = 0;
-    char hasJpgFile = 0;
     struct timeval timestamp;
 
-    if (mode == ExistingFiles) {
-        fileCount = scandir(folder, &fileList, 0, alphasort);
-        if (fileCount < 0) {
-           perror("error during scandir\n");
-           return NULL;
-        }
-    }
-#endif
-    struct timeval timestamp;
+    DBG("#work_thread# start ...\n");
 
     /* set cleanup handler to cleanup allocated resources */
     pthread_cleanup_push(worker_cleanup, NULL);
 
     while(!pglobal->stop) {
-#if 0
-        if (mode == NewFilesOnly) {
-            /* wait for new frame, read will block until something happens */
-            rc = read(fd, ev, size);
-            if(rc == -1) {
-                perror("reading inotify events failed\n");
-                break;
-            }
-
-            /* sanity check */
-            if(wd != ev->wd) {
-                fprintf(stderr, "This event is not for the watched directory (%d != %d)\n", wd, ev->wd);
-                continue;
-            }
-
-            if(ev->mask & (IN_IGNORED | IN_Q_OVERFLOW | IN_UNMOUNT)) {
-                fprintf(stderr, "event mask suggests to stop\n");
-                break;
-            }
-
-            /* prepare filename */
-            snprintf(buffer, sizeof(buffer), "%s%s", folder, ev->name);
-
-            /* check if the filename matches specified parameter (if given) */
-            if((filename != NULL) && (strcmp(filename, ev->name) != 0)) {
-                DBG("ignoring this change (specified filename does not match)\n");
-                continue;
-            }
-            DBG("new file detected: %s\n", buffer);
-        } else {
-            if ((strstr(fileList[currentFileNumber]->d_name, ".jpg") != NULL) ||
-                (strstr(fileList[currentFileNumber]->d_name, ".JPG") != NULL)) {
-                hasJpgFile = 1;
-                DBG("serving file: %s\n", fileList[currentFileNumber]->d_name);
-                snprintf(buffer, sizeof(buffer), "%s%s", folder, fileList[currentFileNumber]->d_name);
-                currentFileNumber++;
-                if (currentFileNumber == fileCount)
-                    currentFileNumber = 0;
-            } else {
-                currentFileNumber++;
-                if ((currentFileNumber == fileCount) && (hasJpgFile == 0)) {
-                    perror("No files with jpg/JPG extension in the folder\n");
-                    goto thread_quit;
-                }
-                continue;
-            }
-        }
-
-#endif
-#if 0
-        /* open file for reading */
-        rc = file = open(buffer, O_RDONLY);
-        if(rc == -1) {
-            perror("could not open file for reading");
-            break;
-        }
-
-        /* approximate size of file */
-        rc = fstat(file, &stats);
-        if(rc == -1) {
-            perror("could not read statistics of file");
-            close(file);
-            break;
-        }
-
-        filesize = stats.st_size;
-
-#endif
         /* copy frame from file to global buffer */
         pthread_mutex_lock(&pglobal->in[plugin_number].db);
+
+        DBG("#work_thread# looping ...\n");
 
         /* allocate memory for frame */
         if(pglobal->in[plugin_number].buf != NULL)
             free(pglobal->in[plugin_number].buf);
-#if 0
-        pglobal->in[plugin_number].buf = malloc(filesize + (1 << 16));
 
-        if(pglobal->in[plugin_number].buf == NULL) {
-            fprintf(stderr, "could not allocate memory\n");
-            break;
-        }
-
-        if((pglobal->in[plugin_number].size = read(file, pglobal->in[plugin_number].buf, filesize)) == -1) {
-            perror("could not read from file");
-            free(pglobal->in[plugin_number].buf); pglobal->in[plugin_number].buf = NULL; pglobal->in[plugin_number].size = 0;
-            pthread_mutex_unlock(&pglobal->in[plugin_number].db);
-            close(file);
-            break;
-        }
-#endif
-        captureScreen(&pglobal->in[plugin_number].buf, &pglobal->in[plugin_number].size);
+        getEncodedBuf(&pglobal->in[plugin_number].buf, &pglobal->in[plugin_number].size);
 
         if(pglobal->in[plugin_number].buf == NULL) {
             fprintf(stderr, "captureScreen buff NULL\n");
@@ -336,26 +210,10 @@ void *worker_thread(void *arg)
         pthread_cond_broadcast(&pglobal->in[plugin_number].db_update);
         pthread_mutex_unlock(&pglobal->in[plugin_number].db);
 
-//        close(file);
-
-        /* delete file if necessary */
-//        if(rm) {
-//            rc = unlink(buffer);
-//            if(rc == -1) {
-//                perror("could not remove/delete file");
-//            }
-//        }
-
         if(delay != 0)
-            // usleep(1000 * 1000 * delay);
             usleep(1000 * delay);
     }
 
-// thread_quit:
-//    while (fileCount--) {
-//       free(fileList[fileCount]);
-//    }
-//    free(fileList);
 
     DBG("leaving input thread, calling cleanup function now\n");
     /* call cleanup handler, signal with the parameter */
@@ -377,20 +235,4 @@ void worker_cleanup(void *arg)
     DBG("cleaning up resources allocated by input thread\n");
 
     if(pglobal->in[plugin_number].buf != NULL) free(pglobal->in[plugin_number].buf);
-
-#if 0
-    free(ev);
-
-    if (mode == NewFilesOnly) {
-        rc = inotify_rm_watch(fd, wd);
-        if(rc == -1) {
-            perror("could not close watch descriptor");
-        }
-
-        rc = close(fd);
-        if(rc == -1) {
-            perror("could not close filedescriptor");
-        }
-    }
-#endif
 }

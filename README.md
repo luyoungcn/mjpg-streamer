@@ -1,15 +1,21 @@
 mjpg-streamer
 =============
 
->>>>>>>>>>>>>>>>>>>>>>>
+>---------------------------------------------------------------------------------------
 为了支持android screen capture input
 1. 添加了 input_screencap plugin
 2. 添加Android.bp (目前只用到了 input_file input_screencap output_http mjpeg_server)
 3. Android 不支持 pthread_cancel API, 相关报错自行处理(简单粗暴是直接注释掉)
 
-目前 V1 版本capture screen + encode + input_screencap work
+V1 版本capture screen + encode + input_screencap work
 都是在一个线程里边做的. 存在卡顿问题。
-<<<<<<<<<<<<<<<<<<<<<<<
+
+V2 版本修改 input_screencap 支持多线程
+
+TODO
+
+目前多线程等待采用的是简单的 sleep, 后续加入wait-cond机制
+--------------------------------------------------------------------------------------->
 
 This is a fork of http://sourceforge.net/projects/mjpg-streamer/ with added support for the Raspberry Pi camera via the input_raspicam plugin.
 

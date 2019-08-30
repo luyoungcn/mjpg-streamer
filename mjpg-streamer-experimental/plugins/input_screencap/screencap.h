@@ -5,7 +5,9 @@
 extern "C" {
 #endif
 
-int captureScreen(unsigned char** in_buf, int* out_size/*format_t type*/);
+void* captureScreen_thread(void* args);
+void* encode_thread(void* args);
+int getEncodedBuf(unsigned char** in_buf, int* out_size/*format_t type*/);
 
 #ifdef __cplusplus
 }
