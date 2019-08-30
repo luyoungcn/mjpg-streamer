@@ -1,7 +1,10 @@
 mjpg-streamer
 =============
 
->---------------------------------------------------------------------------------------
+```markdown
+
+## Desc
+
 为了支持android screen capture input
 1. 添加了 input_screencap plugin
 2. 添加Android.bp (目前只用到了 input_file input_screencap output_http mjpeg_server)
@@ -15,7 +18,28 @@ V2 版本修改 input_screencap 支持多线程
 TODO
 
 目前多线程等待采用的是简单的 sleep, 后续加入wait-cond机制
---------------------------------------------------------------------------------------->
+
+## usage
+make input_screencap output_http mjpeg_server -j8
+
+adb wait-for-device; adb root; adb remount
+adb push out/target/product/yebisu/system/lib64/input_screencap.so /system/lib64/
+adb push out/target/product/yebisu/system/lib64/input_screencap.so /system/lib64/
+adb push out/target/product/yebisu/system/lib64/output_http.so /system/lib64/
+adb push out/target/product/yebisu/system/bin/mjpeg_server /system/bin/
+
+手机端启动服务
+mjpeg_server -i "/system/lib64/input_screencap.so -d 100" -o "/system/lib64/output_http.so"
+mjpeg_server -i "/system/lib64/input_screencap.so -d 10" -o "/system/lib64/output_http.so"
+
+浏览器访问
+http://192.168.31.43:8080/?action=stream
+
+
+注意:
+    ANDROID 开热点, pc 连接到 ANDROID ap
+```
+
 
 This is a fork of http://sourceforge.net/projects/mjpg-streamer/ with added support for the Raspberry Pi camera via the input_raspicam plugin.
 
