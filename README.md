@@ -1,8 +1,7 @@
 mjpg-streamer
 =============
 
-```markdown
-
+------
 ## Desc
 
 为了支持android screen capture input
@@ -14,6 +13,8 @@ V1 版本capture screen + encode + input_screencap work
 都是在一个线程里边做的. 存在卡顿问题。
 
 V2 版本修改 input_screencap 支持多线程
+
+V3 加入 bench test
 
 TODO
 
@@ -35,11 +36,14 @@ mjpeg_server -i "/system/lib64/input_screencap.so -d 10" -o "/system/lib64/outpu
 浏览器访问
 http://192.168.31.43:8080/?action=stream
 
+查看性能的命令(先将服务运行时命令行输出的log保存到 performance.log
+        然后执行下面命令)
+cat performance.log | grep -i t_delay_cap | cut -d " " -f 3 | sort
 
 注意:
     ANDROID 开热点, pc 连接到 ANDROID ap
-```
 
+------
 
 This is a fork of http://sourceforge.net/projects/mjpg-streamer/ with added support for the Raspberry Pi camera via the input_raspicam plugin.
 
