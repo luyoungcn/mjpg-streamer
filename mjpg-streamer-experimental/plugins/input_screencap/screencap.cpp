@@ -33,9 +33,11 @@
 #include <ui/DisplayInfo.h>
 #include <ui/PixelFormat.h>
 #include <utils/Mutex.h>
+#include <utils/Condition.h>
 
 #include <system/graphics.h>
 
+#include "common.h"
 #include "screencap.h"
 #include "../../mjpg_streamer.h"
 
@@ -56,6 +58,8 @@ struct encode_buf_info {
 };
 
 android::Mutex mLock;
+android::Condition m_waitEncodeCond;
+android::Condition m_waitScreenCapCond;
 queue<sp<GraphicBuffer>> GBufferQueue;
 queue<struct encode_buf_info> EncodedBufferQueue;
 
@@ -127,6 +131,9 @@ void* captureScreen_thread(void* args) {
     while (1) {
         int32_t displayId = DEFAULT_DISPLAY_ID;
 
+
+        uint64_t t_delay_cap_start = getTimeMillis();
+
         DBG("captureScreen_thread Enter GBufferQueue size: %zd\n", GBufferQueue.size());
 
         sp<IBinder> display = SurfaceComposerClient::getBuiltInDisplay(displayId);
@@ -149,7 +156,7 @@ void* captureScreen_thread(void* args) {
         uint32_t captureOrientation = ORIENTATION_MAP[displayOrientation];
 
         while (GBufferQueue.size() > 3) {
-            DBG("############### too many GBuffer ready, wait consumer\n");
+            DBG("# too many GBuffer ready, wait consumer\n");
             usleep(1000*50);
         }
 
@@ -166,6 +173,9 @@ void* captureScreen_thread(void* args) {
             android::Mutex::Autolock _l(mLock);
             GBufferQueue.push(outBuffer);
         }
+        uint64_t t_delay_cap_end = getTimeMillis();
+
+        printf("#performance# t_delay_cap %" PRIu64 "\n", t_delay_cap_end - t_delay_cap_start);
     }
     return NULL;
 }
@@ -179,10 +189,13 @@ void* encode_thread(void* args) {
         sp<GraphicBuffer> outBuffer;
         struct encode_buf_info encode_buf;
 
+
+        uint64_t t_delay_encode_start = getTimeMillis();
+
         DBG("encode_thread Enter GBufferQueue size: %zd, EncodedBufferQueue size: %zd\n", GBufferQueue.size(), EncodedBufferQueue.size());
 
         while (GBufferQueue.size() < 1 || EncodedBufferQueue.size() > 6) {
-            DBG("######### waiting for capture or client\n");
+            DBG("# waiting for capture or client\n");
             usleep(1000*10);
         }
 
@@ -203,6 +216,13 @@ void* encode_thread(void* args) {
 
         w = outBuffer->getWidth();
         h = outBuffer->getHeight();
+
+#if 1
+        w = 640;
+        h = 480;
+#endif
+
+
         s = outBuffer->getStride();
         f = outBuffer->getPixelFormat();
         d = HAL_DATASPACE_UNKNOWN;
@@ -241,6 +261,10 @@ void* encode_thread(void* args) {
             EncodedBufferQueue.push(encode_buf);
             GBufferQueue.pop();
         }
+
+        uint64_t t_delay_encode_end = getTimeMillis();
+
+        printf("#performance# t_delay_encode %" PRIu64 "\n", t_delay_encode_end - t_delay_encode_start);
     }
 
 
@@ -256,8 +280,8 @@ int getEncodedBuf(unsigned char** in_buf, int* out_size/*format_t type*/) {
     DBG("getEncodedBuf Enter, EncodedBufferQueue size: %zd\n", EncodedBufferQueue.size());
 
     while (EncodedBufferQueue.size() < 1) {
-        DBG("###############        waiting for encoded buffer\n");
-        usleep(1000*50);
+        DBG("# waiting for encoded buffer\n");
+        usleep(1000*1);
     }
 
     struct encode_buf_info info;

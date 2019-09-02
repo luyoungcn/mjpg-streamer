@@ -35,6 +35,7 @@
 #include "../../mjpg_streamer.h"
 #include "../../utils.h"
 #include "screencap.h"
+#include "common.h"
 
 #define INPUT_PLUGIN_NAME "SCREENCAP input plugin"
 
@@ -186,7 +187,11 @@ void *worker_thread(void *arg)
     /* set cleanup handler to cleanup allocated resources */
     pthread_cleanup_push(worker_cleanup, NULL);
 
+    lastTime = getTimeMillis();
+
     while(!pglobal->stop) {
+        uint64_t t_delay_send_start = getTimeMillis();
+
         /* copy frame from file to global buffer */
         pthread_mutex_lock(&pglobal->in[plugin_number].db);
 
@@ -212,6 +217,12 @@ void *worker_thread(void *arg)
 
         if(delay != 0)
             usleep(1000 * delay);
+
+        uint64_t t_delay_send_end = getTimeMillis();
+
+        printf("#performance# t_delay_send %" PRIu64 "\n" , t_delay_send_end - t_delay_send_start);
+
+        fps();
     }
 
 

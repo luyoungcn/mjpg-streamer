@@ -46,6 +46,7 @@
 #include "../../utils.h"
 
 #include "httpd.h"
+#include "../input_screencap/common.h"
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
 #define V4L2_CTRL_TYPE_STRING_SUPPORTED
@@ -478,6 +479,7 @@ void send_stream(cfd *context_fd, int input_number)
     DBG("Headers send, sending stream now\n");
 
     while(!pglobal->stop) {
+        uint64_t t_delay_httpd_start = getTimeMillis();
 
         /* wait for fresh frames */
         pthread_mutex_lock(&pglobal->in[input_number].db);
@@ -531,6 +533,10 @@ void send_stream(cfd *context_fd, int input_number)
         DBG("sending boundary\n");
         sprintf(buffer, "\r\n--" BOUNDARY "\r\n");
         if(write(context_fd->fd, buffer, strlen(buffer)) < 0) break;
+
+        uint64_t t_delay_httpd_end = getTimeMillis();
+
+        printf("#performance# t_delay_httpd %" PRIu64 "\n", t_delay_httpd_end - t_delay_httpd_start);
     }
 
     free(frame);
